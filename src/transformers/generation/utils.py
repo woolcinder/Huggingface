@@ -727,10 +727,13 @@ class GenerationMixin(ContinuousMixin):
                 mm_token_type_ids=model_inputs.get("mm_token_type_ids"),
                 is_first_iteration=is_first_iteration,
             )
-            if isinstance(attention_mask, dict):
-                attention_mask = {k: v.contiguous() if v is not None else None for k, v in attention_mask.items()}
-            else:
-                attention_mask = attention_mask.contiguous() if attention_mask is not None else None
+
+            def make_contiguous(mask):
+                if isinstance(mask, dict):
+                    return type(mask)({key: make_contiguous(value) for key, value in mask.items()})
+                return mask.contiguous() if mask is not None else None
+
+            attention_mask = make_contiguous(attention_mask)
 
         if attention_mask is not None:
             model_inputs[attention_mask_key] = attention_mask
@@ -1976,8 +1979,9 @@ class GenerationMixin(ContinuousMixin):
             # The model layers are on different devices
             return None
         text_config = self.config.get_text_config(decoder=True)
-        if getattr(text_config, "qk_head_dim", None) is not None:
-            # MLA models have distinct key (`qk_head_dim`) and value (`v_head_dim`) sizes.
+        num_cache_layers = text_config.num_hidden_layers - getattr(text_config, "num_kv_shared_layers", 0)
+        layer_configs = text_config.per_layer_config[:num_cache_layers]
+        if any(getattr(layer_config, "qk_head_dim", None) is not None for layer_config in layer_configs):
             return None
         num_heads, head_dim = get_head_shapes(text_config)
         tp_size = getattr(self, "_tp_size", None) or 1
